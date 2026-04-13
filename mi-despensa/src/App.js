@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "./firebase";
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from "firebase/firestore";
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, orderBy, limit, serverTimestamp, getDoc, setDoc } from "firebase/firestore";
 
 const P = {
   50:"#EEEDFE", 100:"#CECBF6", 200:"#AFA9EC",
@@ -23,41 +23,83 @@ const css = `
   .pill-btn:active { transform: scale(0.95); }
 `;
 
+const genId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
 export default function App() {
+  const [user, setUser]         = useState(localStorage.getItem("pantry_user") || "");
+  const [pantryId, setPantryId] = useState(localStorage.getItem("pantry_id") || "");
+  const [pantryName, setPantryName] = useState("Mi Hogar");
+
   const [tab, setTab]         = useState(0);
   const [prods, setProds]     = useState([]);
   const [lista, setLista]     = useState([]);
+  const [logros, setLogros]   = useState([]);
   const [recetas, setRecetas] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm]       = useState({ nombre:"", cantidad:"", unidad:"kg", minimo:"1", cat:"Otros" });
   const [nuevoItem, setNuevoItem] = useState("");
   const [expanded, setExpanded]   = useState(null);
+  const [editName, setEditName]   = useState(false);
 
   // Suscripción a datos de Firebase
   useEffect(() => {
-    const qProds = query(collection(db, "productos"), orderBy("nombre"));
+    if (!pantryId) return;
+
+    // Cargar Info de la Despensa
+    const unsubPantry = onSnapshot(doc(db, "pantries", pantryId), (d) => {
+      if (d.exists()) setPantryName(d.data().name || "Mi Hogar");
+    });
+
+    const qProds = query(collection(db, "pantries", pantryId, "productos"), orderBy("nombre"));
     const unsubProds = onSnapshot(qProds, (snap) => {
       setProds(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    const qLista = collection(db, "lista");
+    const qLista = collection(db, "pantries", pantryId, "lista");
     const unsubLista = onSnapshot(qLista, (snap) => {
       setLista(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubProds(); unsubLista(); };
-  }, []);
+    const qRecetas = query(collection(db, "pantries", pantryId, "sugerencias"), orderBy("createdAt", "desc"), limit(1));
+    const unsubRecetas = onSnapshot(qRecetas, (snap) => {
+      if (!snap.empty) setRecetas(snap.docs[0].data().recetas);
+    });
+
+    const qLogros = query(collection(db, "pantries", pantryId, "logros"), orderBy("createdAt", "desc"));
+    const unsubLogros = onSnapshot(qLogros, (snap) => {
+      setLogros(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubPantry(); unsubProds(); unsubLista(); unsubRecetas(); unsubLogros(); };
+  }, [pantryId]);
+
+  const setupPantry = async (id, isNew = false) => {
+    if (isNew) {
+      await setDoc(doc(db, "pantries", id), { name: "Nueva Despensa", createdAt: serverTimestamp() });
+    } else {
+      const d = await getDoc(doc(db, "pantries", id));
+      if (!d.exists()) return alert("Código de despensa no encontrado");
+    }
+    localStorage.setItem("pantry_id", id);
+    localStorage.setItem("pantry_user", user);
+    setPantryId(id);
+  };
+
+  const updatePantryName = async (val) => {
+    await updateDoc(doc(db, "pantries", pantryId), { name: val });
+    setEditName(false);
+  };
 
   const addProd = async () => {
     if (!form.nombre.trim() || form.cantidad==="") return;
-    const p = { nombre:form.nombre.trim(), cantidad:parseFloat(form.cantidad), unidad:form.unidad, minimo:parseFloat(form.minimo)||1, cat:form.cat };
+    const p = { nombre:form.nombre.trim(), cantidad:parseFloat(form.cantidad), unidad:form.unidad, minimo:parseFloat(form.minimo)||1, cat:form.cat, createdAt: serverTimestamp() };
     
-    await addDoc(collection(db, "productos"), p);
+    await addDoc(collection(db, "pantries", pantryId, "productos"), p);
     
     if (est(p.cantidad, p.minimo) === "agotado") {
       if (!lista.find(i => i.nombre === p.nombre)) {
-        await addDoc(collection(db, "lista"), { nombre: p.nombre, checked: false, auto: true });
+        await addDoc(collection(db, "pantries", pantryId, "lista"), { nombre: p.nombre, checked: false, auto: true });
       }
     }
     setForm({ nombre:"", cantidad:"", unidad:"kg", minimo:"1", cat:"Otros" });
@@ -69,42 +111,44 @@ export default function App() {
     if (!p) return;
     const n = Math.max(0, parseFloat((p.cantidad + d).toFixed(2)));
     
-    await updateDoc(doc(db, "productos", id), { cantidad: n });
+    await updateDoc(doc(db, "pantries", pantryId, "productos", id), { cantidad: n });
 
     if (n <= 0 && !lista.find(i => i.nombre === p.nombre)) {
-      await addDoc(collection(db, "lista"), { nombre: p.nombre, checked: false, auto: true });
+      await addDoc(collection(db, "pantries", pantryId, "lista"), { nombre: p.nombre, checked: false, auto: true });
     }
   };
 
-  const delProd = async id => await deleteDoc(doc(db, "productos", id));
-  const toggle  = async (id, current) => await updateDoc(doc(db, "lista", id), { checked: !current });
-  const delItem = async id => await deleteDoc(doc(db, "lista", id));
+  const delProd = async id => await deleteDoc(doc(db, "pantries", pantryId, "productos", id));
+  const toggle  = async (id, current) => await updateDoc(doc(db, "pantries", pantryId, "lista", id), { checked: !current });
+  const delItem = async id => await deleteDoc(doc(db, "pantries", pantryId, "lista", id));
   const addItem = async () => {
     if (!nuevoItem.trim()) return;
-    await addDoc(collection(db, "lista"), { nombre: nuevoItem.trim(), checked: false, auto: false });
+    await addDoc(collection(db, "pantries", pantryId, "lista"), { nombre: nuevoItem.trim(), checked: false, auto: false });
     setNuevoItem("");
+  };
+
+  const cocinarReceta = async (r) => {
+    await addDoc(collection(db, "pantries", pantryId, "logros"), {
+      nombre: r.nombre,
+      emoji: r.emoji || "🍳",
+      createdAt: serverTimestamp()
+    });
   };
 
   const sugerir = async () => {
     const ingredientesDisponibles = prods.filter(p=>p.cantidad>0);
     if (ingredientesDisponibles.length === 0) return;
-
-    if (!process.env.REACT_APP_GEMINI_KEY) {
-      console.error("Error: REACT_APP_GEMINI_KEY no está configurada en el archivo .env");
-      setRecetas("error");
-      return;
-    }
-
-    setLoading(true); setRecetas(null); setExpanded(null);
+    
+    setLoading(true); setExpanded(null);
     const disp = ingredientesDisponibles.map(p=>`${p.nombre} (${p.cantidad} ${p.unidad})`).join(", ");
     
     try {
-      const apiKey = process.env.REACT_APP_GEMINI_KEY;
+      const apiKey = process.env.REACT_APP_GEMINI_KEY?.trim();
       if (!apiKey) {
         throw new Error("La API Key no está definida en el archivo .env");
       }
 
-      // Cambiamos a v1beta ya que v1 suele devolver 404 para gemini-1.5-flash en varias regiones
+      // URL definitiva: Usamos v1beta para asegurar compatibilidad con gemini-1.5-flash si v1 falla
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
       console.log("Iniciando petición a:", url);
 
@@ -133,7 +177,14 @@ export default function App() {
       if (jsonMatch) txt = jsonMatch[0];
       
       const parsed = JSON.parse(txt);
+      
+      // EN LUGAR DE setRecetas local, GUARDAMOS EN FIREBASE
+      await addDoc(collection(db, "pantries", pantryId, "sugerencias"), {
+        recetas: parsed.recetas || [],
+        createdAt: serverTimestamp()
+      });
       setRecetas(parsed.recetas || []);
+
     } catch (err) { 
       console.error("Error al obtener recetas:", err);
       setRecetas("error"); 
@@ -147,6 +198,29 @@ export default function App() {
 
   const inputStyle = { width:"100%", boxSizing:"border-box", borderRadius:14, border:`1.5px solid ${P[200]}`, padding:"10px 14px", fontSize:14, outline:"none", background:"#fff", color:"#1a1a2e" };
 
+  if (!pantryId) return (
+    <div style={{fontFamily:"var(--font-sans)",maxWidth:480,margin:"0 auto",padding:"2rem 1.5rem",background:"#F8F7FF",minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
+      <div style={{textAlign:"center",marginBottom:"2rem"}}>
+        <div style={{fontSize:60,marginBottom:10}}>🏠</div>
+        <h2 style={{color:P[900],margin:0}}>Bienvenido a Despensa IA</h2>
+        <p style={{color:P[400],fontSize:14}}>Gestiona tu hogar de forma inteligente</p>
+      </div>
+      <div className="card" style={{background:"#fff",padding:"1.5rem",borderRadius:24,boxShadow:`0 4px 20px ${P[100]}`}}>
+        <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600,color:P[600]}}>TU NOMBRE</p>
+        <input style={{...inputStyle,marginBottom:20}} placeholder="Ej. Ana García" value={user} onChange={e=>setUser(e.target.value)} />
+        
+        <div style={{height:"1.5px",background:P[50],margin:"10px 0 20px"}} />
+        
+        <button className="pill-btn" onClick={()=>user && setupPantry(genId(), true)} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
+        
+        <p style={{textAlign:"center",fontSize:12,color:P[300],margin:"10px 0"}}>— O IMPORTAR UNA EXISTENTE —</p>
+        
+        <input style={{...inputStyle,textAlign:"center",letterSpacing:4,fontWeight:700,marginBottom:10}} placeholder="CÓDIGO" maxLength={6} onChange={e=>{if(e.target.value.length===6) setupPantry(e.target.value.toUpperCase())}} />
+        <p style={{textAlign:"center",fontSize:11,color:P[400]}}>Ingresa el código de 6 dígitos de tu compañero</p>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{fontFamily:"var(--font-sans)",maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",background:"#F8F7FF",minHeight:620}}>
       <style>{css}</style>
@@ -155,8 +229,17 @@ export default function App() {
       <div style={{background:`linear-gradient(135deg,${P[600]},${P[400]})`,padding:"1.5rem 1.25rem 1.75rem",borderRadius:"0 0 28px 28px",marginBottom:"-12px",position:"relative",zIndex:1}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <h1 style={{fontSize:24,fontWeight:500,margin:"0 0 4px",color:"#fff",letterSpacing:"-0.3px"}}>Mi Despensa 🛒</h1>
-            <span style={{fontSize:12,color:P[100]}}>CASA-42 · 2 usuarios conectados</span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {editName ? (
+                <input autoFocus onBlur={e=>updatePantryName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&updatePantryName(e.target.value)} defaultValue={pantryName} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:20,fontWeight:600,borderRadius:8,padding:"2px 8px",outline:"none",width:180}} />
+              ) : (
+                <h1 onClick={()=>setEditName(true)} style={{fontSize:24,fontWeight:500,margin:0,color:"#fff",letterSpacing:"-0.3px",cursor:"pointer"}}>{pantryName} 🛒</h1>
+              )}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
+              <span style={{fontSize:11,color:P[100],background:"rgba(0,0,0,0.1)",padding:"2px 8px",borderRadius:99,cursor:"pointer"}} onClick={()=>{navigator.clipboard.writeText(pantryId);alert("Código copiado!")}}>ID: {pantryId} 📋</span>
+              <span style={{fontSize:11,color:P[100]}}>• Hola, {user}</span>
+            </div>
           </div>
           {agotados>0 && (
             <div style={{background:"rgba(255,255,255,0.2)",borderRadius:14,padding:"8px 14px",textAlign:"center",backdropFilter:"blur(4px)"}}>
@@ -333,15 +416,39 @@ export default function App() {
                       <p style={{margin:0,fontSize:14,color:"#333",lineHeight:1.65}}>{paso}</p>
                     </div>
                   ))}
+                  <button 
+                    className="pill-btn" 
+                    onClick={() => cocinarReceta(r)}
+                    style={{marginTop:16, width:"100%", padding:"12px", background:P[600], color:"#fff", border:"none", borderRadius:14, cursor:"pointer", fontWeight:600, fontSize:14}}
+                  >
+                    🍳 ¡La cociné! (Ganar Logro)
+                  </button>
                 </div>
               )}
             </div>
           ))}
+
+          {/* Sección de Logros */}
+          {logros.length > 0 && (
+            <div style={{marginTop:32, paddingBottom:20}}>
+              <p style={{fontSize:14, fontWeight:600, color:P[800], marginBottom:16, display:"flex", alignItems:"center", gap:8}}>
+                Mis Logros Culinarios 🏆 <span style={{fontSize:12, color:P[400], fontWeight:400}}>({logros.length})</span>
+              </p>
+              <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(80px, 1fr))", gap:12}}>
+                {logros.map(l => (
+                  <div key={l.id} className="card" style={{background:"#fff", borderRadius:18, padding:12, textAlign:"center", boxShadow:`0 2px 0 ${P[100]}`}}>
+                    <div style={{fontSize:28, marginBottom:4}}>{l.emoji}</div>
+                    <div style={{fontSize:10, fontWeight:600, color:"#1a1a2e", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{l.nombre}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>}
       </div>
 
       {/* Bottom nav */}
-      <div style={{borderTop:`1.5px solid ${P[100]}`,display:"flex",background:"#fff",borderRadius:"20px 20px 0 0",paddingBottom:4}}>
+      <div style={{borderTop:`1.5px solid ${P[100]}`,display:"flex",background:"#fff",borderRadius:"20px 20px 0 0",paddingBottom:10,boxShadow:"0 -2px 10px rgba(0,0,0,0.03)"}}>
         {[["🏠","Despensa",null],["🛒","Compras",pendientes||null],["👨‍🍳","Recetas",null]].map(([icon,lbl,badge],i)=>(
           <button key={i} className="navbtn" onClick={()=>setTab(i)} style={{flex:1,padding:"12px 0 8px",background:"transparent",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,position:"relative"}}>
             <div style={{width:44,height:44,borderRadius:16,background:tab===i?P[50]:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,transition:"background 0.2s"}}>{icon}</div>
