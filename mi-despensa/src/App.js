@@ -75,15 +75,20 @@ export default function App() {
   }, [pantryId]);
 
   const setupPantry = async (id, isNew = false) => {
-    if (isNew) {
-      await setDoc(doc(db, "pantries", id), { name: "Nueva Despensa", createdAt: serverTimestamp() });
-    } else {
-      const d = await getDoc(doc(db, "pantries", id));
-      if (!d.exists()) return alert("Código de despensa no encontrado");
+    try {
+      if (isNew) {
+        await setDoc(doc(db, "pantries", id), { name: "Nueva Despensa", createdAt: serverTimestamp() });
+      } else {
+        const d = await getDoc(doc(db, "pantries", id));
+        if (!d.exists()) return alert("Código de despensa no encontrado");
+      }
+      localStorage.setItem("pantry_id", id);
+      localStorage.setItem("pantry_user", user);
+      setPantryId(id);
+    } catch (err) {
+      console.error("Error al configurar despensa:", err);
+      alert("Error de conexión. Revisa las reglas de Firestore o tu conexión a internet.");
     }
-    localStorage.setItem("pantry_id", id);
-    localStorage.setItem("pantry_user", user);
-    setPantryId(id);
   };
 
   const updatePantryName = async (val) => {
@@ -211,7 +216,10 @@ export default function App() {
         
         <div style={{height:"1.5px",background:P[50],margin:"10px 0 20px"}} />
         
-        <button className="pill-btn" onClick={()=>user && setupPantry(genId(), true)} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
+        <button className="pill-btn" onClick={() => {
+          if (!user.trim()) return alert("Por favor, ingresa tu nombre primero");
+          setupPantry(genId(), true);
+        }} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
         
         <p style={{textAlign:"center",fontSize:12,color:P[300],margin:"10px 0"}}>— O IMPORTAR UNA EXISTENTE —</p>
         
