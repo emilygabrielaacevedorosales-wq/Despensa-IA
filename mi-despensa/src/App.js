@@ -42,6 +42,7 @@ export default function App() {
   const [nuevoItem, setNuevoItem] = useState("");
   const [expanded, setExpanded]   = useState(null);
   const [editName, setEditName]   = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Suscripción a datos de Firebase
   useEffect(() => {
@@ -77,22 +78,31 @@ export default function App() {
 
   const setupPantry = async (id, isNew = false) => {
     if (!user.trim()) return alert("Por favor, ingresa tu nombre primero");
+    
+    setIsLoggingIn(true);
+    console.log("Iniciando proceso de acceso...");
+
     try {
       // Autenticación anónima para cumplir con las reglas de seguridad de Firebase
       await signInAnonymously(auth);
+      console.log("Autenticación anónima completada");
       
       if (isNew) {
+        console.log("Creando nueva despensa:", id);
         await setDoc(doc(db, "pantries", id), { name: "Nueva Despensa", createdAt: serverTimestamp() });
       } else {
+        console.log("Buscando despensa existente:", id);
         const d = await getDoc(doc(db, "pantries", id));
-        if (!d.exists()) return alert("Código de despensa no encontrado");
+        if (!d.exists()) throw new Error("Código de despensa no encontrado");
       }
       localStorage.setItem("pantry_id", id);
       localStorage.setItem("pantry_user", user);
       setPantryId(id);
     } catch (err) {
-      console.error("Error detallado:", err);
-      alert("Error al conectar: " + err.message);
+      console.error("Fallo en setupPantry:", err);
+      alert("Error: " + (err.message || "Error desconocido al conectar"));
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -221,11 +231,20 @@ export default function App() {
         
         <div style={{height:"1.5px",background:P[50],margin:"10px 0 20px"}} />
         
-        <button className="pill-btn" onClick={() => setupPantry(genId(), true)} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
+        <button 
+          className="pill-btn" 
+          onClick={() => setupPantry(genId(), true)} 
+          disabled={isLoggingIn}
+          style={{width:"100%",padding:"14px",background:isLoggingIn ? P[200] : P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:isLoggingIn ? "default" : "pointer"}}
+        >
+          {isLoggingIn ? "Conectando..." : "Crear Nueva Despensa"}
+        </button>
         
         <p style={{textAlign:"center",fontSize:12,color:P[300],margin:"10px 0"}}>— O IMPORTAR UNA EXISTENTE —</p>
         
-        <input style={{...inputStyle,textAlign:"center",letterSpacing:4,fontWeight:700,marginBottom:10}} placeholder="CÓDIGO" maxLength={6} onChange={e=>{
+        <input 
+          disabled={isLoggingIn}
+          style={{...inputStyle,textAlign:"center",letterSpacing:4,fontWeight:700,marginBottom:10,opacity:isLoggingIn ? 0.6 : 1}} placeholder="CÓDIGO" maxLength={6} onChange={e=>{
           const val = e.target.value.toUpperCase();
           if(val.length===6) setupPantry(val);
         }} />
