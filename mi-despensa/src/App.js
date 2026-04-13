@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { db } from "./firebase";
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from "firebase/firestore";
 
 const P = {
   50:"#EEEDFE", 100:"#CECBF6", 200:"#AFA9EC",
@@ -6,20 +8,6 @@ const P = {
 };
 
 const CATS = { Granos:"🌾", Lácteos:"🥛", Verduras:"🥦", Carnes:"🥩", Otros:"📦" };
-
-const initProds = [
-  { id:1, nombre:"Arroz",   cantidad:3,   unidad:"kg", minimo:1, cat:"Granos"   },
-  { id:2, nombre:"Harina",  cantidad:0.5, unidad:"kg", minimo:1, cat:"Granos"   },
-  { id:3, nombre:"Leche",   cantidad:0,   unidad:"L",  minimo:2, cat:"Lácteos"  },
-  { id:4, nombre:"Queso",   cantidad:1,   unidad:"un", minimo:1, cat:"Lácteos"  },
-  { id:5, nombre:"Tomates", cantidad:4,   unidad:"un", minimo:3, cat:"Verduras" },
-  { id:6, nombre:"Pollo",   cantidad:0,   unidad:"kg", minimo:1, cat:"Carnes"   },
-];
-
-const initLista = [
-  { id:1, nombre:"Leche", checked:false, auto:true },
-  { id:2, nombre:"Pollo", checked:false, auto:true },
-];
 
 const est  = (c,m) => c<=0 ? "agotado" : c<=m ? "poco" : "ok";
 const ECOLORS = { ok:"#4CAF50", poco:"#FF9800", agotado:"#EF5350" };
@@ -37,8 +25,8 @@ const css = `
 
 export default function App() {
   const [tab, setTab]         = useState(0);
-  const [prods, setProds]     = useState(initProds);
-  const [lista, setLista]     = useState(initLista);
+  const [prods, setProds]     = useState([]);
+  const [lista, setLista]     = useState([]);
   const [recetas, setRecetas] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -46,30 +34,54 @@ export default function App() {
   const [nuevoItem, setNuevoItem] = useState("");
   const [expanded, setExpanded]   = useState(null);
 
-  const addProd = () => {
+  // Suscripción a datos de Firebase
+  useEffect(() => {
+    const qProds = query(collection(db, "productos"), orderBy("nombre"));
+    const unsubProds = onSnapshot(qProds, (snap) => {
+      setProds(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const qLista = collection(db, "lista");
+    const unsubLista = onSnapshot(qLista, (snap) => {
+      setLista(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubProds(); unsubLista(); };
+  }, []);
+
+  const addProd = async () => {
     if (!form.nombre.trim() || form.cantidad==="") return;
-    const p = { id:Date.now(), nombre:form.nombre.trim(), cantidad:parseFloat(form.cantidad), unidad:form.unidad, minimo:parseFloat(form.minimo)||1, cat:form.cat };
-    setProds(prev=>[...prev,p]);
-    if (est(p.cantidad,p.minimo)==="agotado")
-      setLista(l=>l.find(i=>i.nombre===p.nombre)?l:[...l,{id:Date.now()+1,nombre:p.nombre,checked:false,auto:true}]);
+    const p = { nombre:form.nombre.trim(), cantidad:parseFloat(form.cantidad), unidad:form.unidad, minimo:parseFloat(form.minimo)||1, cat:form.cat };
+    
+    await addDoc(collection(db, "productos"), p);
+    
+    if (est(p.cantidad, p.minimo) === "agotado") {
+      if (!lista.find(i => i.nombre === p.nombre)) {
+        await addDoc(collection(db, "lista"), { nombre: p.nombre, checked: false, auto: true });
+      }
+    }
     setForm({ nombre:"", cantidad:"", unidad:"kg", minimo:"1", cat:"Otros" });
     setShowForm(false);
   };
 
-  const cambiar = (id,d) => setProds(prev=>prev.map(p=>{
-    if (p.id!==id) return p;
-    const n = Math.max(0,parseFloat((p.cantidad+d).toFixed(2)));
-    if (n<=0 && !lista.find(i=>i.nombre===p.nombre))
-      setLista(l=>[...l,{id:Date.now(),nombre:p.nombre,checked:false,auto:true}]);
-    return {...p,cantidad:n};
-  }));
+  const cambiar = async (id, d) => {
+    const p = prods.find(x => x.id === id);
+    if (!p) return;
+    const n = Math.max(0, parseFloat((p.cantidad + d).toFixed(2)));
+    
+    await updateDoc(doc(db, "productos", id), { cantidad: n });
 
-  const delProd = id => setProds(prev=>prev.filter(p=>p.id!==id));
-  const toggle  = id => setLista(prev=>prev.map(i=>i.id===id?{...i,checked:!i.checked}:i));
-  const delItem = id => setLista(prev=>prev.filter(i=>i.id!==id));
-  const addItem = () => {
+    if (n <= 0 && !lista.find(i => i.nombre === p.nombre)) {
+      await addDoc(collection(db, "lista"), { nombre: p.nombre, checked: false, auto: true });
+    }
+  };
+
+  const delProd = async id => await deleteDoc(doc(db, "productos", id));
+  const toggle  = async (id, current) => await updateDoc(doc(db, "lista", id), { checked: !current });
+  const delItem = async id => await deleteDoc(doc(db, "lista", id));
+  const addItem = async () => {
     if (!nuevoItem.trim()) return;
-    setLista(prev=>[...prev,{id:Date.now(),nombre:nuevoItem.trim(),checked:false,auto:false}]);
+    await addDoc(collection(db, "lista"), { nombre: nuevoItem.trim(), checked: false, auto: false });
     setNuevoItem("");
   };
 
@@ -77,12 +89,26 @@ export default function App() {
     const ingredientesDisponibles = prods.filter(p=>p.cantidad>0);
     if (ingredientesDisponibles.length === 0) return;
 
+    if (!process.env.REACT_APP_GEMINI_KEY) {
+      console.error("Error: REACT_APP_GEMINI_KEY no está configurada en el archivo .env");
+      setRecetas("error");
+      return;
+    }
+
     setLoading(true); setRecetas(null); setExpanded(null);
     const disp = ingredientesDisponibles.map(p=>`${p.nombre} (${p.cantidad} ${p.unidad})`).join(", ");
+    
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_KEY}`,
-        {
+      const apiKey = process.env.REACT_APP_GEMINI_KEY;
+      if (!apiKey) {
+        throw new Error("La API Key no está definida en el archivo .env");
+      }
+
+      // Cambiamos a v1beta ya que v1 suele devolver 404 para gemini-1.5-flash en varias regiones
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      console.log("Iniciando petición a:", url);
+
+      const res = await fetch(url, {
           method:"POST",
           headers:{"Content-Type":"application/json"},
           body:JSON.stringify({
@@ -161,7 +187,7 @@ export default function App() {
                     <div style={{fontSize:12,color:P[400]}}>{p.cat}</div>
                   </div>
                   <span style={{fontSize:12,fontWeight:500,padding:"4px 10px",borderRadius:99,background:col+"22",color:col}}>{ELABELS[e]}</span>
-                  <button onClick={()=>delProd(p.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#ccc",padding:4,lineHeight:1}}>✕</button>
+                  <button onClick={() => delProd(p.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#ccc",padding:4,lineHeight:1}}>✕</button>
                 </div>
 
                 <div style={{height:7,borderRadius:99,background:P[50],marginBottom:12,overflow:"hidden"}}>
@@ -224,7 +250,7 @@ export default function App() {
 
           {lista.filter(i=>!i.checked).map(item=>(
             <div key={item.id} className="card" style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:"#fff",borderRadius:18,marginBottom:10,boxShadow:`0 2px 0 ${P[100]}`}}>
-              <div onClick={()=>toggle(item.id)} style={{width:24,height:24,borderRadius:99,border:`2px solid ${P[300]||P[200]}`,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}} />
+              <div onClick={() => toggle(item.id, item.checked)} style={{width:24,height:24,borderRadius:99,border:`2px solid ${P[300]||P[200]}`,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}} />
               <span style={{flex:1,fontSize:15,color:"#1a1a2e"}}>{item.nombre}</span>
               {item.auto && <span style={{fontSize:11,padding:"3px 10px",borderRadius:99,background:P[50],color:P[600],fontWeight:500}}>auto</span>}
               <button onClick={()=>delItem(item.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#ccc",padding:4}}>✕</button>
@@ -235,12 +261,12 @@ export default function App() {
             <p style={{fontSize:13,color:P[400],margin:"1.5rem 0 10px",fontWeight:500}}>Comprados ✓</p>
             {lista.filter(i=>i.checked).map(item=>(
               <div key={item.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:"#fff",borderRadius:18,marginBottom:10,opacity:0.45}}>
-                <div onClick={()=>toggle(item.id)} style={{width:24,height:24,borderRadius:99,background:P[400],cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff"}}>✓</div>
+                <div onClick={() => toggle(item.id, item.checked)} style={{width:24,height:24,borderRadius:99,background:P[400],cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff"}}>✓</div>
                 <span style={{flex:1,fontSize:15,color:"#999",textDecoration:"line-through"}}>{item.nombre}</span>
                 <button onClick={()=>delItem(item.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#ccc",padding:4}}>✕</button>
               </div>
             ))}
-            <button className="pill-btn" onClick={()=>setLista(l=>l.filter(i=>!i.checked))} style={{width:"100%",padding:"12px 0",borderRadius:99,border:`1.5px solid ${P[200]}`,background:"transparent",cursor:"pointer",fontSize:14,color:P[600],marginTop:4}}>
+            <button className="pill-btn" onClick={() => lista.filter(i => i.checked).forEach(i => delItem(i.id))} style={{width:"100%",padding:"12px 0",borderRadius:99,border:`1.5px solid ${P[200]}`,background:"transparent",cursor:"pointer",fontSize:14,color:P[600],marginTop:4}}>
               Limpiar comprados
             </button>
           </>}
