@@ -1,0 +1,13 @@
+{
+  "short_name": "Mi Despensa",
+  "name": "Mi Despensa",
+  "icons": [
+    { "src": "favicon.ico", "sizes": "64x64", "type": "image/x-icon" },
+    { "src": "logo192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "logo512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#534AB7",
+  "background_color": "#F8F7FF"
+}
