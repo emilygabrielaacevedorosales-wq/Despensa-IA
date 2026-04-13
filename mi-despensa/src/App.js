@@ -29,6 +29,8 @@ const css = `
   @keyframes popIn { from{transform:scale(0.92);opacity:0} to{transform:scale(1);opacity:1} }
   .card { animation: popIn 0.18s ease; }
   .navbtn { transition: transform 0.12s; }
+  @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+  .loading-skeleton { animation: pulse 1.5s infinite ease-in-out; }
   .navbtn:active { transform: scale(0.88); }
   .pill-btn:active { transform: scale(0.95); }
 `;
@@ -72,28 +74,50 @@ export default function App() {
   };
 
   const sugerir = async () => {
+    const ingredientesDisponibles = prods.filter(p=>p.cantidad>0);
+    if (ingredientesDisponibles.length === 0) return;
+
     setLoading(true); setRecetas(null); setExpanded(null);
-    const disp = prods.filter(p=>p.cantidad>0).map(p=>p.nombre).join(", ");
+    const disp = ingredientesDisponibles.map(p=>`${p.nombre} (${p.cantidad} ${p.unidad})`).join(", ");
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.REACT_APP_GEMINI_KEY}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_KEY}`,
         {
           method:"POST",
           headers:{"Content-Type":"application/json"},
           body:JSON.stringify({
-            contents:[{ parts:[{ text:`Eres un chef. Ingredientes disponibles: ${disp}. Devuelve SOLO JSON válido sin backticks: {"recetas":[{"nombre":"...","emoji":"...","tiempo":"...","dificultad":"Fácil","ingredientes":["..."],"pasos":["..."]}]}. Exactamente 3 recetas.` }] }]
+            contents:[{ parts:[{ text:`Genera 3 recetas cortas con estos ingredientes: ${disp}. Responde exclusivamente en formato JSON: {"recetas":[{"nombre":"...","emoji":"...","tiempo":"...","dificultad":"...","ingredientes":["..."],"pasos":["..."]}]}` }] }]
           })
         }
       );
+      
+      if (res.status === 429) {
+        setRecetas("rate-limit");
+        setLoading(false);
+        return;
+      }
+      if (!res.ok) throw new Error(`Error API: ${res.status}`);
+
       const data = await res.json();
-      const txt = data.candidates[0].content.parts[0].text.replace(/```json|```/g,"").trim();
-      setRecetas(JSON.parse(txt).recetas);
-    } catch { setRecetas("error"); }
+      if (!data.candidates || !data.candidates[0]) throw new Error("No se recibió respuesta de la IA");
+
+      let txt = data.candidates[0].content.parts[0].text;
+      // Intenta extraer solo el contenido entre llaves si hay texto extra
+      const jsonMatch = txt.match(/\{[\s\S]*\}/);
+      if (jsonMatch) txt = jsonMatch[0];
+      
+      const parsed = JSON.parse(txt);
+      setRecetas(parsed.recetas || []);
+    } catch (err) { 
+      console.error("Error al obtener recetas:", err);
+      setRecetas("error"); 
+    }
     setLoading(false);
   };
 
   const pendientes = lista.filter(i=>!i.checked).length;
   const agotados   = prods.filter(p=>est(p.cantidad,p.minimo)==="agotado").length;
+  const dispCount  = prods.filter(p=>p.cantidad>0).length;
 
   const inputStyle = { width:"100%", boxSizing:"border-box", borderRadius:14, border:`1.5px solid ${P[200]}`, padding:"10px 14px", fontSize:14, outline:"none", background:"#fff", color:"#1a1a2e" };
 
@@ -227,14 +251,33 @@ export default function App() {
           <div style={{background:`linear-gradient(135deg,${P[50]},#fff)`,borderRadius:20,padding:"1.25rem",marginBottom:"1.25rem",border:`1.5px solid ${P[100]}`}}>
             <p style={{margin:"0 0 4px",fontSize:16,fontWeight:500,color:P[800]}}>¿Qué cocinar hoy? 👨‍🍳</p>
             <p style={{margin:"0 0 1rem",fontSize:13,color:P[400]}}>
-              Tienes {prods.filter(p=>p.cantidad>0).length} ingredientes disponibles
+              Tienes {dispCount} ingredientes disponibles
             </p>
-            <button className="pill-btn" onClick={sugerir} disabled={loading} style={{width:"100%",padding:"13px 0",borderRadius:99,border:"none",background:loading?P[200]:P[600],cursor:loading?"default":"pointer",fontWeight:500,fontSize:15,color:"#fff",transition:"background 0.2s"}}>
-              {loading ? "✨ Generando recetas..." : "✨ Sugerir recetas"}
+            <button 
+              className="pill-btn" 
+              onClick={sugerir} 
+              disabled={loading || dispCount === 0} 
+              style={{width:"100%",padding:"13px 0",borderRadius:99,border:"none",background:(loading || dispCount === 0)?P[200]:P[600],cursor:(loading || dispCount === 0)?"default":"pointer",fontWeight:500,fontSize:15,color:"#fff",transition:"background 0.2s"}}
+            >
+              {loading ? "✨ Generando recetas..." : dispCount === 0 ? "Agrega ingredientes para sugerencias" : "✨ Sugerir recetas"}
             </button>
           </div>
 
-          {recetas==="error" && <p style={{color:"#EF5350",fontSize:14,textAlign:"center"}}>Algo salió mal. Intenta de nuevo.</p>}
+          {recetas==="error" && <p style={{color:"#EF5350",fontSize:14,textAlign:"center",padding:"10px"}}>❌ Algo salió mal. Intenta de nuevo.</p>}
+          {recetas==="rate-limit" && <p style={{color:"#FF9800",fontSize:14,textAlign:"center",padding:"10px",background:"#FFF3E0",borderRadius:12}}>⚠️ Demasiadas peticiones. Por favor, espera 60 segundos antes de intentar de nuevo.</p>}
+
+          {loading && [1,2,3].map(n => (
+            <div key={n} className="loading-skeleton" style={{background:"#fff",borderRadius:20,marginBottom:12,padding:"16px",display:"flex",alignItems:"center",gap:14,boxShadow:`0 2px 0 ${P[100]}`}}>
+              <div style={{width:52,height:52,borderRadius:18,background:P[50],flexShrink:0}} />
+              <div style={{flex:1}}>
+                <div style={{height:14,width:"60%",background:P[50],borderRadius:4,marginBottom:8}} />
+                <div style={{display:"flex",gap:8}}>
+                  <div style={{height:10,width:50,background:P[50],borderRadius:99}} />
+                  <div style={{height:10,width:50,background:P[50],borderRadius:99}} />
+                </div>
+              </div>
+            </div>
+          ))}
 
           {Array.isArray(recetas) && recetas.map((r,i)=>(
             <div key={i} className="card" style={{background:"#fff",borderRadius:20,marginBottom:12,overflow:"hidden",boxShadow:`0 2px 0 ${P[100]}`}}>
