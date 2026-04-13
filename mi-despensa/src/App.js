@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { db } from "./firebase";
+import { db, auth } from "./firebase";
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, orderBy, limit, serverTimestamp, getDoc, setDoc } from "firebase/firestore";
+import { signInAnonymously } from "firebase/auth";
 
 const P = {
   50:"#EEEDFE", 100:"#CECBF6", 200:"#AFA9EC",
@@ -75,7 +76,11 @@ export default function App() {
   }, [pantryId]);
 
   const setupPantry = async (id, isNew = false) => {
+    if (!user.trim()) return alert("Por favor, ingresa tu nombre primero");
     try {
+      // Autenticación anónima para cumplir con las reglas de seguridad de Firebase
+      await signInAnonymously(auth);
+      
       if (isNew) {
         await setDoc(doc(db, "pantries", id), { name: "Nueva Despensa", createdAt: serverTimestamp() });
       } else {
@@ -86,8 +91,8 @@ export default function App() {
       localStorage.setItem("pantry_user", user);
       setPantryId(id);
     } catch (err) {
-      console.error("Error al configurar despensa:", err);
-      alert("Error de conexión. Revisa las reglas de Firestore o tu conexión a internet.");
+      console.error("Error detallado:", err);
+      alert("Error al conectar: " + err.message);
     }
   };
 
@@ -216,14 +221,14 @@ export default function App() {
         
         <div style={{height:"1.5px",background:P[50],margin:"10px 0 20px"}} />
         
-        <button className="pill-btn" onClick={() => {
-          if (!user.trim()) return alert("Por favor, ingresa tu nombre primero");
-          setupPantry(genId(), true);
-        }} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
+        <button className="pill-btn" onClick={() => setupPantry(genId(), true)} style={{width:"100%",padding:"14px",background:P[600],color:"#fff",border:"none",borderRadius:16,fontWeight:600,marginBottom:12,cursor:"pointer"}}>Crear Nueva Despensa</button>
         
         <p style={{textAlign:"center",fontSize:12,color:P[300],margin:"10px 0"}}>— O IMPORTAR UNA EXISTENTE —</p>
         
-        <input style={{...inputStyle,textAlign:"center",letterSpacing:4,fontWeight:700,marginBottom:10}} placeholder="CÓDIGO" maxLength={6} onChange={e=>{if(e.target.value.length===6) setupPantry(e.target.value.toUpperCase())}} />
+        <input style={{...inputStyle,textAlign:"center",letterSpacing:4,fontWeight:700,marginBottom:10}} placeholder="CÓDIGO" maxLength={6} onChange={e=>{
+          const val = e.target.value.toUpperCase();
+          if(val.length===6) setupPantry(val);
+        }} />
         <p style={{textAlign:"center",fontSize:11,color:P[400]}}>Ingresa el código de 6 dígitos de tu compañero</p>
       </div>
     </div>
@@ -236,7 +241,7 @@ export default function App() {
       {/* Header */}
       <div style={{background:`linear-gradient(135deg,${P[600]},${P[400]})`,padding:"1.5rem 1.25rem 1.75rem",borderRadius:"0 0 28px 28px",marginBottom:"-12px",position:"relative",zIndex:1}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
+          <div style={{flex:1}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               {editName ? (
                 <input autoFocus onBlur={e=>updatePantryName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&updatePantryName(e.target.value)} defaultValue={pantryName} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:20,fontWeight:600,borderRadius:8,padding:"2px 8px",outline:"none",width:180}} />
@@ -249,6 +254,12 @@ export default function App() {
               <span style={{fontSize:11,color:P[100]}}>• Hola, {user}</span>
             </div>
           </div>
+          <button onClick={() => {
+            if(window.confirm("¿Deseas salir de esta despensa?")) {
+              localStorage.clear();
+              window.location.reload();
+            }
+          }} style={{background:"rgba(255,255,255,0.15)", border:"none", borderRadius:12, padding:"8px", color:"#fff", cursor:"pointer", marginLeft:10, fontSize:18}}>🚪</button>
           {agotados>0 && (
             <div style={{background:"rgba(255,255,255,0.2)",borderRadius:14,padding:"8px 14px",textAlign:"center",backdropFilter:"blur(4px)"}}>
               <div style={{fontSize:20,fontWeight:500,color:"#fff"}}>{agotados}</div>

@@ -1,2 +1,14 @@
-body { margin: 0; background: #F8F7FF; }
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+body { 
+  margin: 0; 
+  background-color: #F8F7FF; 
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #1a1a2e;
+}
+
 * { box-sizing: border-box; }
